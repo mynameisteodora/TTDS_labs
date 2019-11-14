@@ -1,6 +1,7 @@
 import os
 import re
 from chardet import detect
+import collections
 
 
 # get file encoding type
@@ -105,7 +106,7 @@ def build_feature_file(original_file, features_bow_file, class_ids_file, destina
                 if not condition:
                     continue
                 else:
-                    word_id = features_bow[word]
+                    word_id = int(features_bow[word])
 
                     if word_id in bow_mapping.keys():
                         bow_mapping[word_id] += 1
@@ -118,15 +119,19 @@ def build_feature_file(original_file, features_bow_file, class_ids_file, destina
             # prepare for printing
             to_print = ""
 
-            for word in tweet_words:
-                if word in features_bow.keys():
-                    word_id = features_bow[word]
-                    #print("word_id = {0}".format(word_id))
-                    word_count = bow_mapping[word_id]
-                    #print(word_count)
-                    to_print += str(word_id) + ':' + str(word_count) + " "
-
-                   # print(to_print)
+            # for word in tweet_words:
+            #     if word in features_bow.keys():
+            #         word_id = features_bow[word]
+            #         #print("word_id = {0}".format(word_id))
+            #         word_count = bow_mapping[word_id]
+            #         #print(word_count)
+            #         to_print += str(word_id) + ':' + str(word_count) + " "
+            #
+            #        # print(to_print)
+            ordered_bow = collections.OrderedDict(sorted(bow_mapping.items()))
+            print(ordered_bow)
+            for bow_word, count in ordered_bow.items():
+                to_print += str(bow_word) + ':' + str(count) + " "
 
             category_id = class_ids[category]
 
