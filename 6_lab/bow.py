@@ -2,6 +2,9 @@ import os
 import re
 from chardet import detect
 import collections
+import numpy as np
+
+num_classes = 14
 
 
 # get file encoding type
@@ -113,23 +116,10 @@ def build_feature_file(original_file, features_bow_file, class_ids_file, destina
                     else:
                         bow_mapping[word_id] = 1
 
-
-            #print("Bow mapping = {0}".format(bow_mapping))
-
             # prepare for printing
             to_print = ""
 
-            # for word in tweet_words:
-            #     if word in features_bow.keys():
-            #         word_id = features_bow[word]
-            #         #print("word_id = {0}".format(word_id))
-            #         word_count = bow_mapping[word_id]
-            #         #print(word_count)
-            #         to_print += str(word_id) + ':' + str(word_count) + " "
-            #
-            #        # print(to_print)
             ordered_bow = collections.OrderedDict(sorted(bow_mapping.items()))
-            print(ordered_bow)
             for bow_word, count in ordered_bow.items():
                 to_print += str(bow_word) + ':' + str(count) + " "
 
@@ -137,6 +127,82 @@ def build_feature_file(original_file, features_bow_file, class_ids_file, destina
 
             f.write('{0} {1} #{2}\n'.format(category_id, to_print, tweet_id))
 
+
+def evaluate_model(features_test_file, predictions_file, output_file):
+    f = open(features_test_file, 'r')
+    g = open(predictions_file, 'r')
+    out = open(output_file, 'w')
+
+    confusion_matrix = np.zeros((num_classes, num_classes))
+    test_file_lines = f.readlines()
+    true_classes = []
+
+    for i in range(len(test_file_lines)):
+        curr_line = test_file_lines[i]
+        if curr_line != '':
+            true_class = curr_line.split()[0]
+            true_classes.append(int(true_class))
+
+    pred_file_lines = g.readlines()
+    correct_classes = 0
+    total_nb_of_classes = len(true_classes)
+
+    for i in range(len(pred_file_lines)):
+        curr_line = pred_file_lines[i]
+        if curr_line != '':
+            pred_class = int(curr_line.split()[0])
+            if pred_class == true_classes[i]:
+                correct_classes += 1
+
+            pred_class_idx = pred_class - 1
+            correct_class_idx = true_classes[i] - 1
+
+            confusion_matrix[pred_class_idx][correct_class_idx] += 1
+
+    accuracy = correct_classes / total_nb_of_classes
+    print("Accuracy = {0}".format(accuracy))
+
+    # compute precision, recall and f1 for each class
+    precisions = []
+    recalls = []
+    f1s = []
+
+    for i in range(num_classes):
+        # precision for class i
+        correct_is = sum(confusion_matrix[:, i])
+        classified_as_i = sum(confusion_matrix[i, :])
+        correctly_predicted_i = confusion_matrix[i][i]
+        prec = correctly_predicted_i / classified_as_i
+
+        # recall for class i
+        recall = correctly_predicted_i / correct_is
+
+        f1 = (2 * prec * recall) / (prec + recall)
+
+        precisions.append(prec)
+        recalls.append(recall)
+        f1s.append(f1)
+
+    # compute macro-f1
+    macro_f1 = sum(f1s) / num_classes
+
+    print("Confusion matrix = \n{0}".format(confusion_matrix))
+    print("Accuracy = {0}".format(('%0.3f' % accuracy)))
+    print("Macro-f1 = {0}".format('%0.3f' % macro_f1))
+
+    out.write("Accuracy = {0}\n".format(('%0.3f' % accuracy)))
+    out.write("Macro-f1 = {0}\n".format('%0.3f' % macro_f1))
+
+    for i in range(num_classes):
+        print("{0}: P={1} R={2} F={3}".format(i + 1, '%0.3f' % precisions[i],
+                                              '%0.3f' % recalls[i],
+                                              '%0.3f' % f1s[i]))
+
+        out.write("{0}: P={1} R={2} F={3}\n".format(i + 1, '%0.3f' % precisions[i],
+                                              '%0.3f' % recalls[i],
+                                              '%0.3f' % f1s[i]))
+
+    return accuracy
 
 
 if __name__ == '__main__':
@@ -149,3 +215,5 @@ if __name__ == '__main__':
 
     build_feature_file('./tweetsclassification/Tweets.14cat.train', './feats.bow', './class_id.txt', 'feats.train')
     build_feature_file('./tweetsclassification/Tweets.14cat.test', './feats.bow', './class_id.txt', 'feats.test')
+
+    print(evaluate_model('./feats.test', './pred.out', 'Eval.txt'))
