@@ -1,10 +1,45 @@
-import os
-import re
-from chardet import detect
 import collections
+import re
+
 import numpy as np
+import requests
+from bs4 import BeautifulSoup
+from chardet import detect
+
+from nltk.tokenize import TweetTokenizer
+from nltk.stem.porter import *
+from nltk.corpus import stopwords
 
 num_classes = 14
+tokeniser = TweetTokenizer(preserve_case=False, reduce_len=True, strip_handles=True)
+stemmer = PorterStemmer()
+stops = set(stopwords.words('english'))
+
+emoticons_happy = set([
+    ':-)', ':)', ';)', ':o)', ':]', ':3', ':c)', ':>', '=]', '8)', '=)', ':}',
+    ':^)', ':-D', ':D', '8-D', '8D', 'x-D', 'xD', 'X-D', 'XD', '=-D', '=D',
+    '=-3', '=3', ':-))', ":'-)", ":')", ':*', ':^*', '>:P', ':-P', ':P', 'X-P',
+    'x-p', 'xp', 'XP', ':-p', ':p', '=p', ':-b', ':b', '>:)', '>;)', '>:-)',
+    '<3'
+])
+emoticons_sad = set([
+    ':L', ':-/', '>:/', ':S', '>:[', ':@', ':-(', ':[', ':-||', '=L', ':<',
+    ':-[', ':-<', '=\\', '=/', '>:(', ':(', '>.<', ":'-(", ":'(", ':\\', ':-c',
+    ':c', ':{', '>:\\', ';('
+])
+
+
+def retrieve_url(url):
+    try:
+        resp = requests.head(url, allow_redirects=True, timeout=5)
+    except:
+        return ""
+    # while resp.status_code == 301:
+    #     resp = requests.head(resp.headers["Location"])
+    if resp.status_code == 200:
+        return resp.url
+    else:
+        return ""
 
 
 # get file encoding type
@@ -54,23 +89,130 @@ def read_class_ids(class_ids_file):
 
 
 def remove_links(tweet):
+    # removes link but puts back the words in the page title of that link
+
+    urls = re.findall(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\(\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+', tweet)
+
+    headers = {
+        'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_11_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/53.0.2785.143 Safari/537.36'}
+
+    for url in urls:
+        og_url = retrieve_url(url)
+        if og_url != "":
+            try:
+                response = requests.get(og_url, headers=headers, timeout=5)
+            except:
+                continue
+
+            soup = BeautifulSoup(response.text, 'lxml')
+            if soup.title:
+                link_title = soup.title.text
+                tweet += " " + link_title
+
     tweet = re.sub(r'http\S+', ' ', tweet)
 
+    print("Final tweet = {0}".format(tweet))
     return tweet
 
 
 def tokenise(tweet):
-    tweet_words = re.sub(r"[^\w\s]|_", " ", tweet).split()
-
+    # tokenise and stopword removal
+    tweet_words = tokeniser.tokenize(tweet)
     return tweet_words
 
 
+# Returns a list of common english terms (words)
+def initialize_words():
+    content = None
+    with open('./common_words.txt') as f:  # A file containing common english words
+        content = f.readlines()
+    return [word.rstrip('\n') for word in content]
+
+
+wordlist = initialize_words()
+
+
+def parse_sentence(sentence, wordlist):
+    new_sentence = ""  # output
+    terms = tokenise(sentence)
+    for term in terms:
+        if len(term) > 0 and term[0] == '#':  # this is a hashtag, parse it
+            new_sentence += parse_tag(term, wordlist)
+        else:  # Just append the word
+            new_sentence += term
+        new_sentence += " "
+
+    return new_sentence.split()
+
+
+def parse_tag(term, wordlist):
+    words = []
+    # Remove hashtag, split by dash
+    tags = term[1:].split('-')
+    for tag in tags:
+        word = find_word(tag, wordlist)
+        while word != None and len(tag) > 0:
+            words.append(word)
+            if len(tag) == len(word):  # Special case for when eating rest of word
+                break
+            tag = tag[len(word):]
+            word = find_word(tag, wordlist)
+    return " ".join(words)
+
+
+def find_word(token, wordlist):
+    i = len(token) + 1
+    while i > 1:
+        i -= 1
+        if token[:i] in wordlist:
+            return token[:i]
+    return None
+
+
+def process_hashtags(tweet):
+    return parse_sentence(tweet, wordlist)
+
+def replace_emojis(tweet_words):
+    for i in range(len(tweet_words)):
+        if tweet_words[i] in emoticons_happy:
+            tweet_words[i] = 'happy'
+        elif tweet_words[i] in emoticons_sad:
+            tweet_words[i] = 'sad'
+
+    return tweet_words
+
+def remove_mentions(tweet_words):
+    for i in range(len(tweet_words)):
+        if tweet_words[i] == '@':
+            del tweet_words[i]
+
+    return tweet_words
+
 def preprocess_tweet(tweet):
     # receives the actual tweet
-    tweet = remove_links(tweet).lower()
+    tweet = remove_links(tweet)
+    # tweet_words = tokenise(tweet)
 
-    tweet_words = tokenise(tweet)
+    # extract words from hashtags
+    tweet_words = process_hashtags(tweet)
 
+    # # remove mentions
+    # tweet_words = remove_mentions(tweet_words)
+
+    # now remove stopwords
+    tweet_words = [word for word in tweet_words if word not in stops]
+
+    # stem
+    stems = [stemmer.stem(p) for p in tweet_words]
+
+    # deal with emojis
+    tweet_words = replace_emojis(stems)
+
+    # remove non-words
+    # but leave in ! and ? as they might be useful for analysis
+    tweet_words = re.sub(r"[^\w\s!?]|_", " ", " ".join(tweet_words)).split()
+
+    print("Preprocessed tweet = {0}".format(tweet_words))
     return tweet_words
 
 
@@ -199,21 +341,30 @@ def evaluate_model(features_test_file, predictions_file, output_file):
                                               '%0.3f' % f1s[i]))
 
         out.write("{0}: P={1} R={2} F={3}\n".format(i + 1, '%0.3f' % precisions[i],
-                                              '%0.3f' % recalls[i],
-                                              '%0.3f' % f1s[i]))
+                                                    '%0.3f' % recalls[i],
+                                                    '%0.3f' % f1s[i]))
 
     return accuracy
 
 
 if __name__ == '__main__':
+    print("Reading the training collection")
     tweet_collection_train = read_tweets('./tweetsclassification/Tweets.14cat.train')
+
+    print("Reading the test collection")
     tweet_collection_test = read_tweets('./tweetsclassification/Tweets.14cat.test')
 
     # careful! bow is built using only the training set
     bow = build_feature_dict(tweet_collection_train)
-    print(bow)
 
-    build_feature_file('./tweetsclassification/Tweets.14cat.train', './feats.bow', './class_id.txt', 'feats.train')
-    build_feature_file('./tweetsclassification/Tweets.14cat.test', './feats.bow', './class_id.txt', 'feats.test')
 
-    print(evaluate_model('./feats.test', './pred.out', 'Eval.txt'))
+    build_feature_file('./tweetsclassification/Tweets.14cat.train', './feats.bow', './class_id.txt', 'feats.train.improved')
+    build_feature_file('./tweetsclassification/Tweets.14cat.test', './feats.bow', './class_id.txt', 'feats.test.improved')
+
+    #print(evaluate_model('./feats.test', './pred.out', 'Eval.txt'))
+
+    # tweet = '# np Music from Keystone Jaq :) https://t.co/JI3jZSleVM #EDM #house #deephouse #trance #DanceMusic	Music @mariana'
+    # print(preprocess_tweet(tweet))
+
+
+
